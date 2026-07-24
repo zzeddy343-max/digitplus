@@ -4,11 +4,12 @@
 
 alter table if exists public.system_settings
   alter column fraud_detection_enabled set default false,
-  alter column fraud_detection_rules set default '';
+    alter column fraud_detection_rules set default '';
 
-update public.system_settings
-set
-  fraud_detection_enabled = false,
-  fraud_detection_rules = '',
-  updated_at = now()
-where id = 'default';
+    update public.system_settings
+    set
+      fraud_detection_enabled = false,
+        fraud_detection_rules = '',
+          updated_at = now()
+          where id = 'default';
+          

@@ -276,7 +276,7 @@ export function BinaryPanel() {
     return { w, l, total: w + l };
   }, [closedTrades]);
 
-  const mult = payoutMultiplier(contractType, direction);
+  const mult = payoutMultiplier(contractType, direction, contract.needsDigit ? digit : null);
   const stakeCents = Math.max(0, Math.round(parseFloat(stake || "0") * 100));
   const potentialPayoutCents = Math.floor(stakeCents * mult);
 
@@ -301,13 +301,17 @@ export function BinaryPanel() {
             trade_id: pendingTrade.id,
             won,
             exit_price: exitPrice,
-            multiplier: payoutMultiplier(pendingTrade.contractType, pendingTrade.direction),
+            multiplier: payoutMultiplier(
+              pendingTrade.contractType,
+              pendingTrade.direction,
+              pendingTrade.digitTarget,
+            ),
           },
         });
         const serverWon = String(res.status ?? "") === "won" || res.won === true;
         setLastOutcome({ digit: exitDigit, won: serverWon, at: Date.now() });
         const payoutCents = Math.round(Number(res.payout ?? 0) * 100);
-        if (serverWon) toast.success(`Won +${formatUSD(payoutCents - pendingTrade.stakeCents)}`);
+        if (serverWon) toast.success(`Trade paid ${formatUSD(payoutCents)}`);
         else toast.error("Trade lost");
       } catch (e) {
         toast.error((e as Error).message);
@@ -386,6 +390,11 @@ export function BinaryPanel() {
       const tradeTicks = Math.max(1, Number(options.tickCount ?? ticks));
       const entryTickIndex = seriesEnd;
       const exitTickIndex = seriesEnd + tradeTicks;
+      const tradeMultiplier = payoutMultiplier(
+        contractType,
+        dir,
+        contract.needsDigit ? digit : null,
+      );
       const res = await placeFn({
         data: {
           module: "binary",
@@ -397,6 +406,7 @@ export function BinaryPanel() {
             account_mode: accountMode,
             contract_type: contractType,
             digit_target: contract.needsDigit ? digit : null,
+            multiplier: tradeMultiplier,
             settlement_ticks: tradeTicks,
             tick_ms: spec.intervalMs,
             entry_tick_index: entryTickIndex,

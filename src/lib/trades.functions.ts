@@ -8,6 +8,7 @@ import {
   type SystemSettings,
 } from "@/lib/system-settings";
 import { shouldControlledBinaryTradeWin } from "@/lib/controlled-binary-outcomes";
+import { DEFAULT_BINARY_PAYOUT_MULTIPLIER } from "@/lib/markets";
 export { isTradeStatusCompletedEnumError } from "@/lib/trade-errors";
 import { isTradeStatusCompletedEnumError } from "@/lib/trade-errors";
 
@@ -282,7 +283,7 @@ export const listMyTrades = createServerFn({ method: "GET" })
       const multiplier =
         stakeCents > 0 && payoutCents > 0
           ? payoutCents / stakeCents
-          : Number(trade.meta?.multiplier ?? 1.95);
+          : Number(trade.meta?.multiplier ?? DEFAULT_BINARY_PAYOUT_MULTIPLIER);
       return {
         id: trade.id,
         market: trade.market,
@@ -797,7 +798,9 @@ async function settleTradeWithAdminFallback(
   }
 
   const stake = Number(trade.stake ?? 0);
-  const payout = won ? Number((stake * Number(multiplier ?? 1.95)).toFixed(2)) : 0;
+  const payout = won
+    ? Number((stake * Number(multiplier ?? DEFAULT_BINARY_PAYOUT_MULTIPLIER)).toFixed(2))
+    : 0;
   const closedAt = new Date().toISOString();
   const nextStatus = won ? "won" : "lost";
 

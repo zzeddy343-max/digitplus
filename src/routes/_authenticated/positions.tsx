@@ -13,6 +13,7 @@ import {
 } from "@/lib/trades.functions";
 import { formatUSD, formatPrice } from "@/lib/format";
 import {
+  DEFAULT_BINARY_PAYOUT_MULTIPLIER,
   lastDigit,
   MARKETS,
   payoutMultiplier,
@@ -142,7 +143,11 @@ function Positions() {
           trade_id: trade.id,
           won,
           exit_price: exitPrice,
-          multiplier: payoutMultiplier(contractType, direction),
+          multiplier: payoutMultiplier(
+            contractType,
+            direction,
+            trade.digit_target == null ? null : Number(trade.digit_target),
+          ),
         },
       });
       const serverWon = String(result.status ?? "") === "won" || result.won === true;
@@ -485,7 +490,12 @@ function MobileTradeCard({
         <MobileStat label="Stake:" value={formatUSD(trade.stake_cents)} />
         <MobileStat
           label="Potential payout:"
-          value={formatUSD(Math.floor(trade.stake_cents * Number(trade.payout_multiplier ?? 1.95)))}
+          value={formatUSD(
+            Math.floor(
+              trade.stake_cents *
+                Number(trade.payout_multiplier ?? DEFAULT_BINARY_PAYOUT_MULTIPLIER),
+            ),
+          )}
         />
       </div>
       {showActions && (

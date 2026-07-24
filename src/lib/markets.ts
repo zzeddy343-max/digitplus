@@ -76,10 +76,22 @@ export function contractFor(type: ContractType) {
   return CONTRACTS.find((contract) => contract.type === type) ?? CONTRACTS[0];
 }
 
-export function payoutMultiplier(type: ContractType, direction: Direction) {
-  if (type === "matches_differs") return direction === "matches" ? 9.1 : 1.12;
-  if (type === "over_under") return 1.78;
-  return 1.95;
+const OVER_UNDER_PAYOUTS_BY_BARRIER = [0.1, 0.12, 0.24, 0.82, 1.28, 1.95, 2.95, 3.75, 6.1, 0];
+
+export const DEFAULT_BINARY_PAYOUT_MULTIPLIER = 1.72;
+
+export function payoutMultiplier(
+  type: ContractType,
+  direction: Direction,
+  digitTarget?: number | null,
+) {
+  if (type === "matches_differs") return direction === "matches" ? 6.15 : 0.14;
+  if (type === "over_under") {
+    const barrier = Math.max(0, Math.min(9, Math.round(Number(digitTarget ?? 5))));
+    const tableIndex = direction === "under" ? 9 - barrier : barrier;
+    return OVER_UNDER_PAYOUTS_BY_BARRIER[tableIndex] ?? DEFAULT_BINARY_PAYOUT_MULTIPLIER;
+  }
+  return DEFAULT_BINARY_PAYOUT_MULTIPLIER;
 }
 
 export function priceAt(marketId: MarketId, timestamp: number) {
