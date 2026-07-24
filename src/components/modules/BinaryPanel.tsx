@@ -287,7 +287,6 @@ export function BinaryPanel() {
       try {
         const exitTime = pendingTrade.exitTickIndex * spec.intervalMs;
         const exitPrice = priceAt(marketId, exitTime);
-        const exitDigit = lastDigit(exitPrice, spec.decimals);
         const won = contractWon(
           pendingTrade.contractType,
           pendingTrade.direction,
@@ -309,7 +308,11 @@ export function BinaryPanel() {
           },
         });
         const serverWon = String(res.status ?? "") === "won" || res.won === true;
-        setLastOutcome({ digit: exitDigit, won: serverWon, at: Date.now() });
+        const finalExitPrice = Number(
+          (res as { exit_price?: number | null }).exit_price ?? exitPrice,
+        );
+        const finalExitDigit = lastDigit(finalExitPrice, spec.decimals);
+        setLastOutcome({ digit: finalExitDigit, won: serverWon, at: Date.now() });
         const payoutCents = Math.round(Number(res.payout ?? 0) * 100);
         if (serverWon) toast.success(`Trade paid ${formatUSD(payoutCents)}`);
         else toast.error("Trade lost");

@@ -7,8 +7,13 @@ import {
   readSystemSettings,
   type SystemSettings,
 } from "@/lib/system-settings";
-import { shouldControlledBinaryTradeWin } from "@/lib/controlled-binary-outcomes";
-import { DEFAULT_BINARY_PAYOUT_MULTIPLIER } from "@/lib/markets";
+import {
+  buildControlledBinaryExitPrice,
+  shouldControlledBinaryTradeWin,
+  type ControlledContractType,
+  type ControlledDirection,
+} from "@/lib/controlled-binary-outcomes";
+import { DEFAULT_BINARY_PAYOUT_MULTIPLIER, MARKETS, type MarketId } from "@/lib/markets";
 export { isTradeStatusCompletedEnumError } from "@/lib/trade-errors";
 import { isTradeStatusCompletedEnumError } from "@/lib/trade-errors";
 
@@ -97,11 +102,12 @@ export const settleTrade = createServerFn({ method: "POST" })
       context.userId,
       data.trade_id,
       data.won,
+      data.exit_price ?? null,
     );
     const { data: result, error } = await supabase.rpc("settle_trade", {
       _trade_id: data.trade_id,
       _won: outcome.won,
-      _exit_price: data.exit_price ?? null,
+      _exit_price: outcome.exitPrice,
       _multiplier: data.multiplier ?? null,
     });
     if (error) {
@@ -117,7 +123,7 @@ export const settleTrade = createServerFn({ method: "POST" })
           context.userId,
           data.trade_id,
           outcome.won,
-          data.exit_price ?? null,
+          outcome.exitPrice,
           data.multiplier ?? null,
         );
         return {
@@ -164,6 +170,7 @@ export const settleTrade = createServerFn({ method: "POST" })
       status: outcome.won ? "won" : "lost",
       won: outcome.won,
       controlled: outcome.controlled,
+      exit_price: outcome.exitPrice,
     };
   });
 
@@ -200,23 +207,24 @@ async function resolveControlledBinaryOutcome(
   userId: string,
   tradeId: string,
   requestedWon: boolean,
+  requestedExitPrice: number | null,
 ) {
   const { data: trade, error: tradeError } = await supabase
     .from("trades")
-    .select("id,module,account_type,status")
+    .select("id,module,account_type,status,market,direction,entry_price,meta")
     .eq("id", tradeId)
     .eq("user_id", userId)
     .maybeSingle();
 
   if (tradeError) throw new Error(tradeError.message);
   if (!trade || trade.module !== "binary" || trade.status !== "open") {
-    return { won: requestedWon, controlled: false };
+    return { won: requestedWon, controlled: false, exitPrice: requestedExitPrice };
   }
 
   const accountType = trade.account_type === "demo" ? "demo" : "real";
   const isAgentReal = accountType === "real" && (await userHasRole(supabase, userId, "agent"));
   if (accountType !== "demo" && !isAgentReal) {
-    return { won: requestedWon, controlled: false };
+    return { won: requestedWon, controlled: false, exitPrice: requestedExitPrice };
   }
 
   const { count, error: countError } = await supabase
@@ -229,10 +237,45 @@ async function resolveControlledBinaryOutcome(
 
   if (countError) throw new Error(countError.message);
 
+  const won = shouldControlledBinaryTradeWin(userId, accountType, count ?? 0);
+  const meta = (trade.meta ?? {}) as Record<string, unknown>;
+  const market = MARKETS[trade.market as MarketId];
+  const contractType = normalizeControlledContractType(meta.contract_type);
+  const direction = normalizeControlledDirection(trade.direction, contractType);
+
   return {
-    won: shouldControlledBinaryTradeWin(userId, accountType, count ?? 0),
+    won,
     controlled: true,
+    exitPrice: buildControlledBinaryExitPrice({
+      entryPrice: Number(trade.entry_price ?? 0),
+      requestedExitPrice,
+      contractType,
+      direction,
+      digitTarget: Number(meta.digit_target ?? 5),
+      decimals: market?.decimals ?? 4,
+      shouldWin: won,
+      seed: `${userId}:${tradeId}:${count ?? 0}`,
+    }),
   };
+}
+
+function normalizeControlledContractType(value: unknown): ControlledContractType {
+  const text = String(value ?? "").toLowerCase();
+  if (text === "rise_fall") return "rise_fall";
+  if (text === "over_under") return "over_under";
+  if (text === "matches_differs") return "matches_differs";
+  return "even_odd";
+}
+
+function normalizeControlledDirection(
+  value: unknown,
+  contractType: ControlledContractType,
+): ControlledDirection {
+  const text = String(value ?? "").toLowerCase();
+  if (contractType === "rise_fall") return text === "fall" ? "fall" : "rise";
+  if (contractType === "over_under") return text === "under" ? "under" : "over";
+  if (contractType === "matches_differs") return text === "matches" ? "matches" : "differs";
+  return text === "odd" ? "odd" : "even";
 }
 
 async function userHasRole(supabase: any, userId: string, role: "agent" | "admin" | "client") {
