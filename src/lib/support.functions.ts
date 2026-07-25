@@ -235,12 +235,17 @@ export const getAdminNotifications = createServerFn({ method: "GET" })
       supabaseAdmin
         .from("transactions")
         .select(
-          "id,user_id,kind,amount_usd,created_at,profiles:user_id(id,email,full_name,username)",
+          "id,user_id,kind,amount_usd,created_at,meta,profiles:user_id(id,email,full_name,username)",
         )
         .in("status", ["pending", "processing"])
         .order("created_at", { ascending: false })
         .limit(8),
     ]);
+
+    const pendingTransactions = (transactionRows ?? []).filter((row) => {
+      const meta = row as { meta?: { admin_approval_required?: boolean } | null };
+      return row.kind === "withdraw" && meta.meta?.admin_approval_required === true;
+    });
 
     const items = [
       ...(supportRows ?? []).map((row) => ({
@@ -251,11 +256,11 @@ export const getAdminNotifications = createServerFn({ method: "GET" })
         created_at: row.last_message_at,
         user_name: (row.profiles as { full_name?: string | null } | null)?.full_name ?? null,
       })),
-      ...(transactionRows ?? []).map((row) => ({
+      ...pendingTransactions.map((row) => ({
         id: `tx-${row.id}`,
         type: "transaction" as const,
-        title: row.kind === "withdrawal" ? "Withdrawal request" : "Deposit request",
-        detail: `${Number(row.amount_usd ?? 0).toFixed(2)} USD pending review`,
+        title: "Withdrawal request",
+        detail: `${Number(row.amount_usd ?? 0).toFixed(2)} USD pending admin approval`,
         created_at: row.created_at,
         user_name: (row.profiles as { full_name?: string | null } | null)?.full_name ?? null,
       })),

@@ -185,7 +185,9 @@ function WalletPage() {
       });
       logDebugEvent("info", "wallet.withdraw", "Withdraw request succeeded", result);
       toast.success(
-        method === "mpesa"
+        result.approval_required
+          ? "Withdrawal processing. Admin approval required before release."
+          : method === "mpesa"
           ? "Withdrawal pending. Waiting for Safaricom approval."
           : "Withdrawal submitted.",
       );

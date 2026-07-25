@@ -80,6 +80,10 @@ export const createWithdrawal = createServerFn({ method: "POST" })
     const netAmount = calculateNetWithdrawalAmount(data.amount, settings.withdrawal_tax_pct);
     const phone = data.method === "mpesa" ? await getProfilePhone(context.userId) : data.phone;
     validateMoney("withdraw", data.method, data.amount, phone, settings);
+    const amountUsd = toUsd(data.amount, "KSH");
+    const totalDepositedUsd = await getCompletedRealDepositTotal(context.userId);
+    const approvalRequired =
+      data.method === "mpesa" && data.account === "real" && amountUsd > totalDepositedUsd;
 
     const tx = await createWalletTransaction(
       {
@@ -89,21 +93,31 @@ export const createWithdrawal = createServerFn({ method: "POST" })
         amount: data.amount,
         account: data.account,
         phone,
+        meta: {
+          admin_approval_required: approvalRequired,
+          approval_status: approvalRequired ? "pending" : "not_required",
+          total_deposited_usd_at_request: totalDepositedUsd,
+          requested_amount_usd: amountUsd,
+        },
       },
       settings,
     );
 
+    if (approvalRequired) {
+      return { ok: true, transaction: tx, approval_required: true };
+    }
+
     if (data.method === "mpesa" && data.account === "real") {
       try {
         const daraja = await sendB2cPayment(tx, phone, netAmount);
-        return { ok: true, transaction: tx, daraja };
+        return { ok: true, transaction: tx, daraja, approval_required: false };
       } catch (error) {
         await markTransaction(tx.id, "failed", { provider_error: getErrorMessage(error) });
         throw error;
       }
     }
 
-    return { ok: true, transaction: tx };
+    return { ok: true, transaction: tx, approval_required: false };
   });
 
 export const syncPendingMpesaDeposits = createServerFn({ method: "POST" })
@@ -172,6 +186,7 @@ async function createWalletTransaction(
     amount: number;
     account: "real" | "demo";
     phone?: string;
+    meta?: Record<string, unknown>;
   },
   settings: SystemSettings,
 ) {
@@ -220,6 +235,7 @@ async function createWalletTransaction(
       status,
       is_virtual: isVirtual,
       meta: {
+        ...(input.meta ?? {}),
         phone: input.method === "mpesa" ? normalizeKenyanPhone(input.phone) : null,
         usd_to_ksh: USD_TO_KSH,
         withdrawal_tax_pct: input.kind === "withdraw" ? settings.withdrawal_tax_pct : null,
@@ -241,6 +257,74 @@ async function createWalletTransaction(
   }
 
   return tx as WalletTransaction;
+}
+
+export async function releaseApprovedWithdrawalTransaction({
+  transactionId,
+  adminUserId,
+}: {
+  transactionId: string;
+  adminUserId: string;
+}) {
+  const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+  const settings = await readSystemSettings();
+  const { data: row, error } = await supabaseAdmin
+    .from("transactions")
+    .select("*")
+    .eq("id", transactionId)
+    .single();
+  if (error || !row) throw new Error(error?.message ?? "Withdrawal not found");
+
+  const transaction = row as unknown as WalletTransaction;
+  if (transaction.kind !== "withdraw" || transaction.account_type !== "real") {
+    throw new Error("Only real withdrawal requests can be approved");
+  }
+  if (!["pending", "processing"].includes(transaction.status)) {
+    throw new Error("This withdrawal is no longer pending approval");
+  }
+  if (!Boolean(transaction.meta?.admin_approval_required)) {
+    throw new Error("This withdrawal does not require admin approval");
+  }
+
+  const phone = getStringValue(transaction.meta?.phone) ?? (await getProfilePhone(transaction.user_id));
+  const payoutAmount = Number(
+    transaction.meta?.net_amount ??
+      calculateNetWithdrawalAmount(Number(transaction.amount), settings.withdrawal_tax_pct),
+  );
+
+  await markTransaction(transaction.id, "processing", {
+    approval_status: "approved",
+    approved_by: adminUserId,
+    approved_at: new Date().toISOString(),
+  });
+
+  try {
+    const daraja = await sendB2cPayment(transaction, phone, payoutAmount);
+    return { ok: true, transaction_id: transaction.id, daraja };
+  } catch (error) {
+    await markTransaction(transaction.id, "failed", {
+      approval_status: "approved_provider_failed",
+      provider_error: getErrorMessage(error),
+    });
+    throw error;
+  }
+}
+
+async function getCompletedRealDepositTotal(userId: string) {
+  const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+  const { data, error } = await supabaseAdmin
+    .from("transactions")
+    .select("amount_usd")
+    .eq("user_id", userId)
+    .eq("kind", "deposit")
+    .eq("account_type", "real")
+    .eq("status", "completed")
+    .eq("is_virtual", false);
+  if (error) throw new Error(error.message);
+  return (data ?? []).reduce(
+    (sum, row) => sum + Number((row as { amount_usd?: number | string | null }).amount_usd ?? 0),
+    0,
+  );
 }
 
 async function sendStkPush(transaction: WalletTransaction, phone?: string) {

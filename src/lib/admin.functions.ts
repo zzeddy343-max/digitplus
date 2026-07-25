@@ -1,6 +1,7 @@
 import { createServerFn } from "@tanstack/react-start";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 import { createAdminUser } from "@/lib/auth.functions";
+import { releaseApprovedWithdrawalTransaction } from "@/lib/wallet.functions";
 import { z } from "zod";
 
 type RoleQuery = {
@@ -55,6 +56,24 @@ type ReportTrade = {
   account_type?: string | null;
   created_at: string;
   closed_at?: string | null;
+};
+
+type WithdrawalApprovalRow = {
+  id: string;
+  user_id: string;
+  amount?: number | string | null;
+  amount_usd?: number | string | null;
+  currency?: string | null;
+  status: string;
+  method?: string | null;
+  meta?: Record<string, unknown> | null;
+  created_at: string;
+  profiles?: {
+    email?: string | null;
+    full_name?: string | null;
+    username?: string | null;
+    balance_usd?: number | string | null;
+  } | null;
 };
 
 // Inline admin gate (has_role EXECUTE is locked down to service_role only)
@@ -757,6 +776,87 @@ export const reconcileSuccessfulB2cCallbacks = createServerFn({ method: "POST" }
     if (acceptedError) throw new Error(acceptedError.message);
 
     return { ok: true, repaired: [...(callbackRows ?? []), ...(acceptedRows ?? [])] };
+  });
+
+export const listWithdrawalApprovalRequests = createServerFn({ method: "GET" })
+  .middleware([requireSupabaseAuth])
+  .handler(async ({ context }) => {
+    await assertAdmin(context.supabase, context.userId);
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+
+    const { data, error } = await supabaseAdmin
+      .from("transactions")
+      .select(
+        "id,user_id,amount,amount_usd,currency,status,method,meta,created_at,profiles:user_id(email,full_name,username,balance_usd)",
+      )
+      .eq("kind", "withdraw")
+      .eq("account_type", "real")
+      .in("status", ["pending", "processing"])
+      .order("created_at", { ascending: false })
+      .limit(100);
+    if (error) throw new Error(error.message);
+
+    const rows = ((data ?? []) as unknown as WithdrawalApprovalRow[]).filter(
+      (row) => row.meta?.admin_approval_required === true,
+    );
+
+    return {
+      requests: rows.map((row) => ({
+        id: row.id,
+        user_id: row.user_id,
+        user_name: row.profiles?.full_name ?? row.profiles?.username ?? row.profiles?.email ?? null,
+        amount: Number(row.amount ?? 0),
+        amount_usd: Number(row.amount_usd ?? row.meta?.requested_amount_usd ?? 0),
+        currency: row.currency ?? "KSH",
+        status: row.status,
+        method: row.method ?? "mpesa",
+        total_deposited_usd: Number(row.meta?.total_deposited_usd_at_request ?? 0),
+        net_amount: Number(row.meta?.net_amount ?? 0),
+        phone: row.meta?.phone ?? null,
+        created_at: row.created_at,
+      })),
+    };
+  });
+
+export const approveWithdrawalApprovalRequest = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((d: unknown) => z.object({ transaction_id: z.string().uuid() }).parse(d))
+  .handler(async ({ data, context }) => {
+    await assertAdmin(context.supabase, context.userId);
+    return releaseApprovedWithdrawalTransaction({
+      transactionId: data.transaction_id,
+      adminUserId: context.userId,
+    });
+  });
+
+export const rejectWithdrawalApprovalRequest = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((d: unknown) =>
+    z
+      .object({
+        transaction_id: z.string().uuid(),
+        reason: z.string().max(240).optional(),
+      })
+      .parse(d),
+  )
+  .handler(async ({ data, context }) => {
+    await assertAdmin(context.supabase, context.userId);
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const { data: tx, error } = await (supabaseAdmin as unknown as RpcAdminClient).rpc(
+      "apply_transaction",
+      {
+        _transaction_id: data.transaction_id,
+        _status: "cancelled",
+        _meta: {
+          approval_status: "rejected",
+          rejected_by: context.userId,
+          rejected_at: new Date().toISOString(),
+          rejection_reason: data.reason ?? "Rejected by admin",
+        },
+      },
+    );
+    if (error) throw new Error(error.message);
+    return { ok: true, transaction: tx };
   });
 
 export const createAdminAccount = createServerFn({ method: "POST" })

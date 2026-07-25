@@ -4,6 +4,7 @@ import { supabase } from "@/integrations/supabase/client";
 import {
   Eye,
   EyeOff,
+  CheckCircle2,
   RotateCcw,
   Shield,
   ShieldPlus,
@@ -29,13 +30,16 @@ import {
   creditAgentVirtual,
   demoteUserRole,
   failStaleMpesaWithdrawals,
+  approveWithdrawalApprovalRequest,
   listAccountMetricAdjustments,
   listAdmins,
   listAgents,
   listClients,
+  listWithdrawalApprovalRequests,
   moderateClientAccount,
   promoteUserRole,
   reconcileSuccessfulB2cCallbacks,
+  rejectWithdrawalApprovalRequest,
   resetAdminAccountsSummary,
   resetUserBalances,
   auditUserBalance,
@@ -118,7 +122,15 @@ type AdminRow = {
 
 function AdminPage() {
   const [tab, setTab] = useState<
-    "accounts" | "users" | "trades" | "agents" | "support" | "settings" | "ledger" | "admins"
+    | "accounts"
+    | "users"
+    | "trades"
+    | "agents"
+    | "withdrawals"
+    | "support"
+    | "settings"
+    | "ledger"
+    | "admins"
   >("accounts");
   const [adminVaultPage, setAdminVaultPage] = useState<"tools" | "admins">("tools");
   const [titleClicks, setTitleClicks] = useState(0);
@@ -203,13 +215,14 @@ function AdminPage() {
         </button>
       </div>
 
-      <div className="grid grid-cols-6 gap-1 bg-card border border-border rounded-xl p-1">
+      <div className="grid grid-cols-4 gap-1 bg-card border border-border rounded-xl p-1 lg:grid-cols-8">
         {(
           [
             "accounts",
             "users",
             "trades",
             "agents",
+            "withdrawals",
             "support",
             "settings",
             "ledger",
@@ -226,6 +239,8 @@ function AdminPage() {
           >
             {k === "accounts"
               ? "Accounts"
+              : k === "withdrawals"
+                ? "Withdraws"
               : k === "ledger"
                 ? "Ledger"
                 : k[0].toUpperCase() + k.slice(1)}
@@ -237,12 +252,145 @@ function AdminPage() {
       {tab === "users" && <UsersTab />}
       {tab === "trades" && <TradesTab />}
       {tab === "agents" && <AgentsTab />}
+      {tab === "withdrawals" && <WithdrawalApprovalsTab />}
       {tab === "support" && <SupportPanel adminMode />}
       {tab === "settings" && <SettingsTab />}
       {tab === "ledger" && <LedgerReconciliationTab />}
       {tab === "admins" && showAdminVault && (
         <HiddenAdminVault page={adminVaultPage} onPageChange={setAdminVaultPage} />
       )}
+    </div>
+  );
+}
+
+type WithdrawalApproval = {
+  id: string;
+  user_id: string;
+  user_name?: string | null;
+  amount: number;
+  amount_usd: number;
+  currency: string;
+  status: string;
+  method: string;
+  total_deposited_usd: number;
+  net_amount: number;
+  phone?: string | null;
+  created_at: string;
+};
+
+function WithdrawalApprovalsTab() {
+  const listFn = useServerFn(listWithdrawalApprovalRequests);
+  const approveFn = useServerFn(approveWithdrawalApprovalRequest);
+  const rejectFn = useServerFn(rejectWithdrawalApprovalRequest);
+  const qc = useQueryClient();
+
+  const { data, isLoading } = useQuery({
+    queryKey: ["withdrawal-approval-requests"],
+    queryFn: () => listFn(),
+    refetchInterval: 10000,
+  });
+  const requests = (data?.requests ?? []) as WithdrawalApproval[];
+
+  const approveMut = useMutation({
+    mutationFn: (transaction_id: string) => approveFn({ data: { transaction_id } }),
+    onSuccess: () => {
+      toast.success("Withdrawal approved and released");
+      qc.invalidateQueries({ queryKey: ["withdrawal-approval-requests"] });
+      qc.invalidateQueries({ queryKey: ["admin-notifications"] });
+      qc.invalidateQueries({ queryKey: ["admin-clients"] });
+    },
+    onError: (e) => toast.error(e instanceof Error ? e.message : "Approval failed"),
+  });
+
+  const rejectMut = useMutation({
+    mutationFn: (transaction_id: string) =>
+      rejectFn({ data: { transaction_id, reason: "Rejected by admin" } }),
+    onSuccess: () => {
+      toast.success("Withdrawal rejected and balance refunded");
+      qc.invalidateQueries({ queryKey: ["withdrawal-approval-requests"] });
+      qc.invalidateQueries({ queryKey: ["admin-notifications"] });
+      qc.invalidateQueries({ queryKey: ["admin-clients"] });
+    },
+    onError: (e) => toast.error(e instanceof Error ? e.message : "Rejection failed"),
+  });
+
+  return (
+    <div className="space-y-3">
+      <div className="rounded-2xl border border-border bg-card p-3">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <div className="font-bold">Withdrawal requests</div>
+            <div className="text-[11px] text-muted-foreground">
+              Above-deposit withdrawals wait here until an admin releases them.
+            </div>
+          </div>
+          <div className="rounded-lg border border-border bg-background px-2 py-1 text-xs font-bold">
+            {requests.length} pending
+          </div>
+        </div>
+      </div>
+
+      {requests.length === 0 && !isLoading && (
+        <div className="rounded-2xl border border-border bg-card p-6 text-center text-sm text-muted-foreground">
+          No withdrawal approvals waiting.
+        </div>
+      )}
+
+      <div className="space-y-2">
+        {requests.map((request) => (
+          <div key={request.id} className="rounded-2xl border border-border bg-card p-3">
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+              <div className="min-w-0">
+                <div className="truncate text-sm font-bold">
+                  {request.user_name || request.user_id?.slice(0, 8) || "Client"}
+                </div>
+                <div className="mt-1 text-[11px] text-muted-foreground">
+                  {new Date(request.created_at).toLocaleString()} · {request.method.toUpperCase()} ·{" "}
+                  {request.phone || "no phone"}
+                </div>
+                <div className="mt-2 grid grid-cols-2 gap-2 text-[11px] lg:grid-cols-4">
+                  <MiniStat label="Requested" value={`KSh ${request.amount.toFixed(0)}`} />
+                  <MiniStat label="USD value" value={`$${request.amount_usd.toFixed(2)}`} />
+                  <MiniStat
+                    label="Deposited"
+                    value={`$${request.total_deposited_usd.toFixed(2)}`}
+                  />
+                  <MiniStat label="Net payout" value={`KSh ${request.net_amount.toFixed(0)}`} />
+                </div>
+              </div>
+              <div className="flex shrink-0 gap-2">
+                <button
+                  onClick={() => approveMut.mutate(request.id)}
+                  disabled={approveMut.isPending || rejectMut.isPending}
+                  className="inline-flex items-center justify-center gap-1.5 rounded-xl bg-bull px-3 py-2 text-xs font-bold text-bull-foreground disabled:opacity-50"
+                >
+                  <CheckCircle2 className="h-4 w-4" />
+                  Approve
+                </button>
+                <button
+                  onClick={() => rejectMut.mutate(request.id)}
+                  disabled={approveMut.isPending || rejectMut.isPending}
+                  className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-bear/30 bg-bear/10 px-3 py-2 text-xs font-bold text-bear disabled:opacity-50"
+                >
+                  <X className="h-4 w-4" />
+                  Reject
+                </button>
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function MiniStat({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-lg border border-border bg-background px-2 py-1.5">
+      <div className="text-[9px] font-bold uppercase tracking-wider text-muted-foreground">
+        {label}
+      </div>
+      <div className="font-mono text-xs font-bold">{value}</div>
     </div>
   );
 }
