@@ -76,20 +76,32 @@ export function contractFor(type: ContractType) {
   return CONTRACTS.find((contract) => contract.type === type) ?? CONTRACTS[0];
 }
 
-const OVER_UNDER_PAYOUTS_BY_BARRIER = [0.1, 0.12, 0.24, 0.82, 1.28, 1.95, 2.95, 3.75, 6.1, 0];
+const OVER_UNDER_PROFIT_BY_BARRIER = [0.1, 0.12, 0.24, 0.82, 1.28, 1.95, 2.95, 3.75, 6.1, 0];
+const MATCHES_PROFIT_MULTIPLIER = 6.15;
+const DIFFERS_PROFIT_MULTIPLIER = 0.14;
 
 export const DEFAULT_BINARY_PAYOUT_MULTIPLIER = 1.72;
+
+export function profitToPayoutMultiplier(profitMultiplier: number) {
+  const profit = Number(profitMultiplier);
+  if (!Number.isFinite(profit) || profit <= 0) return 0;
+  return Number((1 + profit).toFixed(4));
+}
 
 export function payoutMultiplier(
   type: ContractType,
   direction: Direction,
   digitTarget?: number | null,
 ) {
-  if (type === "matches_differs") return direction === "matches" ? 6.15 : 0.14;
+  if (type === "matches_differs") {
+    return profitToPayoutMultiplier(
+      direction === "matches" ? MATCHES_PROFIT_MULTIPLIER : DIFFERS_PROFIT_MULTIPLIER,
+    );
+  }
   if (type === "over_under") {
     const barrier = Math.max(0, Math.min(9, Math.round(Number(digitTarget ?? 5))));
     const tableIndex = direction === "under" ? 9 - barrier : barrier;
-    return OVER_UNDER_PAYOUTS_BY_BARRIER[tableIndex] ?? DEFAULT_BINARY_PAYOUT_MULTIPLIER;
+    return profitToPayoutMultiplier(OVER_UNDER_PROFIT_BY_BARRIER[tableIndex] ?? 0);
   }
   return DEFAULT_BINARY_PAYOUT_MULTIPLIER;
 }

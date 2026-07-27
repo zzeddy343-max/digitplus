@@ -46,6 +46,11 @@ const PlaceTradeInput = z.object({
   meta: z.record(z.string(), z.any()).optional(),
 });
 
+function normalizeTotalReturnMultiplier(multiplier: number) {
+  if (!Number.isFinite(multiplier) || multiplier <= 0) return 0;
+  return multiplier > 0 && multiplier < 1 ? Number((1 + multiplier).toFixed(4)) : multiplier;
+}
+
 export const placeTrade = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d: unknown) => PlaceTradeInput.parse(d))
@@ -841,8 +846,11 @@ async function settleTradeWithAdminFallback(
   }
 
   const stake = Number(trade.stake ?? 0);
+  const totalReturnMultiplier = normalizeTotalReturnMultiplier(
+    Number(multiplier ?? DEFAULT_BINARY_PAYOUT_MULTIPLIER),
+  );
   const payout = won
-    ? Number((stake * Number(multiplier ?? DEFAULT_BINARY_PAYOUT_MULTIPLIER)).toFixed(2))
+    ? Number((stake * totalReturnMultiplier).toFixed(2))
     : 0;
   const closedAt = new Date().toISOString();
   const nextStatus = won ? "won" : "lost";
