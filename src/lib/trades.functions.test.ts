@@ -30,6 +30,15 @@ test("controlled binary outcomes stay at 80 wins per 100 without a constant loss
   assert.ok(new Set(lossSlotsByBlock).size > 1);
 });
 
+test("controlled binary outcomes also apply to agent real-account trades", () => {
+  const results = Array.from({ length: 100 }, (_, index) =>
+    shouldControlledBinaryTradeWin("agent-a", "real", index),
+  );
+
+  assert.equal(results.filter(Boolean).length, 80);
+  assert.equal(results.filter((won) => !won).length, 20);
+});
+
 test("controlled over/under settlements land on a digit that matches the chosen result", () => {
   const winPrice = buildControlledBinaryExitPrice({
     entryPrice: 1000,

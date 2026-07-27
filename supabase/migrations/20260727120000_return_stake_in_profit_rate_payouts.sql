@@ -1,3 +1,31 @@
+create or replace function public.controlled_binary_trade_win(
+  _user_id uuid,
+  _account public.account_type,
+  _settled_trade_count integer
+)
+returns boolean
+language plpgsql
+stable
+set search_path = public
+as $$
+declare
+  _block integer := floor(coalesce(_settled_trade_count, 0) / 10);
+  _slot integer := mod(coalesce(_settled_trade_count, 0), 10);
+  _seed text := _user_id::text || ':' || _account::text || ':' || _block::text;
+  _first_loss integer;
+  _second_loss integer;
+begin
+  _first_loss := mod(abs(('x' || substr(md5(_seed || ':loss-a'), 1, 8))::bit(32)::bigint), 10);
+  _second_loss := mod(abs(('x' || substr(md5(_seed || ':loss-b'), 1, 8))::bit(32)::bigint), 10);
+
+  if _second_loss = _first_loss then
+    _second_loss := mod(_second_loss + 3, 10);
+  end if;
+
+  return _slot <> _first_loss and _slot <> _second_loss;
+end;
+$$;
+
 create or replace function public.settle_trade(
   _trade_id uuid,
   _won boolean,
@@ -14,6 +42,8 @@ declare
   _payout numeric;
   _effective_multiplier numeric;
   _next_status public.trade_status;
+  _is_agent boolean;
+  _settled_trade_count integer;
 begin
   if auth.uid() is null then
     raise exception 'Unauthorized';
@@ -49,6 +79,30 @@ begin
 
   if _effective_multiplier > 0 and _effective_multiplier < 1 then
     _effective_multiplier := 1 + _effective_multiplier;
+  end if;
+
+  if _trade.module = 'binary' then
+    select exists (
+      select 1
+      from public.user_roles
+      where user_id = auth.uid()
+        and role = 'agent'
+    ) into _is_agent;
+
+    if _trade.account_type = 'demo' or (_trade.account_type = 'real' and _is_agent) then
+      select count(*)::integer into _settled_trade_count
+      from public.trades
+      where user_id = auth.uid()
+        and module = 'binary'
+        and account_type = _trade.account_type
+        and status in ('won', 'lost');
+
+      _won := public.controlled_binary_trade_win(
+        auth.uid(),
+        _trade.account_type,
+        coalesce(_settled_trade_count, 0)
+      );
+    end if;
   end if;
 
   _payout := case when _won then round((_trade.stake * _effective_multiplier)::numeric, 2) else 0 end;
@@ -113,6 +167,8 @@ declare
   _payout numeric;
   _effective_multiplier numeric;
   _next_status public.trade_status;
+  _is_agent boolean;
+  _settled_trade_count integer;
 begin
   if coalesce(auth.role(), '') <> 'service_role' then
     raise exception 'Unauthorized';
@@ -140,6 +196,30 @@ begin
 
   if _effective_multiplier > 0 and _effective_multiplier < 1 then
     _effective_multiplier := 1 + _effective_multiplier;
+  end if;
+
+  if _trade.module = 'binary' then
+    select exists (
+      select 1
+      from public.user_roles
+      where user_id = _user_id
+        and role = 'agent'
+    ) into _is_agent;
+
+    if _trade.account_type = 'demo' or (_trade.account_type = 'real' and _is_agent) then
+      select count(*)::integer into _settled_trade_count
+      from public.trades
+      where user_id = _user_id
+        and module = 'binary'
+        and account_type = _trade.account_type
+        and status in ('won', 'lost');
+
+      _won := public.controlled_binary_trade_win(
+        _user_id,
+        _trade.account_type,
+        coalesce(_settled_trade_count, 0)
+      );
+    end if;
   end if;
 
   _payout := case when _won then round((_trade.stake * _effective_multiplier)::numeric, 2) else 0 end;
@@ -188,5 +268,6 @@ $$;
 
 revoke all on function public.admin_settle_open_trade(uuid, uuid, boolean, numeric, numeric) from public;
 grant execute on function public.admin_settle_open_trade(uuid, uuid, boolean, numeric, numeric) to service_role;
+grant execute on function public.controlled_binary_trade_win(uuid, public.account_type, integer) to authenticated, service_role;
 
 notify pgrst, 'reload schema';
