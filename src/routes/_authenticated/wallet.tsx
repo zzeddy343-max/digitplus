@@ -464,6 +464,9 @@ function grossDisplay(value: string, percentage?: number) {
 
 function errorMessage(error: unknown) {
   const message = getErrorMessage(error, "Request failed. Please try again.");
+  if (/failed to fetch|networkerror|load failed/i.test(message)) {
+    return "Unable to reach the payment service. Check your connection and try again.";
+  }
   if (
     /daraja|access token|oauth|provider|stk|b2c|environment variable|consumer|passkey|shortcode/i.test(
       message,
