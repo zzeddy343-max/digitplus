@@ -34,6 +34,7 @@ import {
   listAdmins,
   listAgents,
   adjustAgentBalance,
+  setAgentWithdrawalsEnabled,
   listClients,
   listWithdrawalApprovalRequests,
   moderateClientAccount,
@@ -97,6 +98,7 @@ type ClientRow = {
   deleted_at?: string | null;
   balance_usd?: number | string | null;
   demo_balance_usd?: number | string | null;
+  withdrawals_enabled?: boolean;
   created_at: string;
 };
 
@@ -1682,6 +1684,7 @@ function AgentsTab() {
   const agentsFn = useServerFn(listAgents);
   const create = useServerFn(createAgent);
   const adjustBalance = useServerFn(adjustAgentBalance);
+  const setWithdrawalsEnabled = useServerFn(setAgentWithdrawalsEnabled);
   const demote = useServerFn(demoteUserRole);
   const resetBalances = useServerFn(resetUserBalances);
   const qc = useQueryClient();
@@ -1727,6 +1730,15 @@ function AgentsTab() {
       qc.invalidateQueries({ queryKey: ["admin-agents"] });
     },
     onError: (e) => toast.error(e instanceof Error ? e.message : "Failed"),
+  });
+  const withdrawalToggleMut = useMutation({
+    mutationFn: (vars: { agent_user_id: string; enabled: boolean }) =>
+      setWithdrawalsEnabled({ data: vars }),
+    onSuccess: (result) => {
+      toast.success(result.enabled ? "Agent withdrawals enabled" : "Agent withdrawals disabled");
+      qc.invalidateQueries({ queryKey: ["admin-agents"] });
+    },
+    onError: (e) => toast.error(e instanceof Error ? e.message : "Could not update withdrawals"),
   });
   const demoteMut = useMutation({
     mutationFn: (vars: { user_id: string }) =>
@@ -1823,6 +1835,24 @@ function AgentsTab() {
             <Cell label="Real balance" v={`$${Number(a.balance_usd ?? 0).toFixed(2)}`} />
             <Cell label="Demo balance" v={`$${Number(a.demo_balance_usd ?? 0).toFixed(2)}`} />
           </div>
+          <button
+            onClick={() =>
+              withdrawalToggleMut.mutate({
+                agent_user_id: a.agent_user_id,
+                enabled: a.withdrawals_enabled === false,
+              })
+            }
+            disabled={withdrawalToggleMut.isPending}
+            className={
+              "w-full rounded-lg border px-2 py-1.5 text-xs font-bold disabled:opacity-50 " +
+              (a.withdrawals_enabled === false
+                ? "border-bear/30 bg-bear/10 text-bear"
+                : "border-bull/30 bg-bull/10 text-bull")
+            }
+          >
+            Withdrawals:{" "}
+            {a.withdrawals_enabled === false ? "OFF (deduct only)" : "ON (send M-Pesa)"}
+          </button>
           {creditOpen === a.agent_user_id ? (
             <div className="flex items-center gap-1.5 pt-1">
               <select

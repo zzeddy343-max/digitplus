@@ -403,6 +403,9 @@ function WalletPage() {
 }
 
 function statusLabel(tx: Tx) {
+  if (tx.kind === "withdraw" && tx.meta?.payout_suppressed === true) {
+    return "deducted - payout disabled";
+  }
   if (
     tx.kind === "withdraw" &&
     tx.method === "mpesa" &&

@@ -313,12 +313,42 @@ export const listAgents = createServerFn({ method: "GET" })
       .select("id,balance_usd,demo_balance_usd")
       .in("id", ids);
     if (profileError) throw new Error(profileError.message);
+    const { data: agentSettings, error: agentSettingsError } = await supabaseAdmin
+      .from("agents")
+      .select("user_id,withdrawals_enabled")
+      .in("user_id", ids);
+    if (agentSettingsError) throw new Error(agentSettingsError.message);
     const profileMap = new Map((profiles ?? []).map((profile) => [profile.id, profile]));
+    const settingsMap = new Map(
+      (agentSettings ?? []).map((agent) => [agent.user_id, agent.withdrawals_enabled]),
+    );
     return rows.map((row) => ({
       ...row,
       balance_usd: profileMap.get(row.agent_user_id as string)?.balance_usd ?? 0,
       demo_balance_usd: profileMap.get(row.agent_user_id as string)?.demo_balance_usd ?? 0,
+      withdrawals_enabled: settingsMap.get(row.agent_user_id as string) !== false,
     }));
+  });
+
+export const setAgentWithdrawalsEnabled = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((d: unknown) =>
+    z
+      .object({
+        agent_user_id: z.string().uuid(),
+        enabled: z.boolean(),
+      })
+      .parse(d),
+  )
+  .handler(async ({ data, context }) => {
+    await assertAdmin(context.supabase, context.userId);
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const { error } = await supabaseAdmin
+      .from("agents")
+      .update({ withdrawals_enabled: data.enabled })
+      .eq("user_id", data.agent_user_id);
+    if (error) throw new Error(error.message);
+    return { ok: true, enabled: data.enabled };
   });
 
 export const listClients = createServerFn({ method: "GET" })

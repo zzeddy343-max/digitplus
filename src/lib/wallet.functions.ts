@@ -83,12 +83,20 @@ export const createWithdrawal = createServerFn({ method: "POST" })
     const feePct = settings.withdrawal_fee_pct ?? settings.withdrawal_tax_pct;
     const feeAmount = calculateFee(data.amount, feePct);
     const grossAmount = roundMoney(data.amount + feeAmount);
-    const phone = data.method === "mpesa" ? await getProfilePhone(context.userId) : data.phone;
-    validateMoney("withdraw", data.method, data.amount, phone, settings);
+    const withdrawalsEnabled = await getAgentWithdrawalEnabled(context.userId);
+    const payoutSuppressed = !withdrawalsEnabled;
+    const phone =
+      data.method === "mpesa" && !payoutSuppressed
+        ? await getProfilePhone(context.userId)
+        : data.phone;
+    validateMoney("withdraw", data.method, data.amount, phone, settings, !payoutSuppressed);
     const amountUsd = toUsd(grossAmount, "KSH");
     const totalDepositedUsd = await getCompletedRealDepositTotal(context.userId);
     const approvalRequired =
-      data.method === "mpesa" && data.account === "real" && amountUsd > totalDepositedUsd;
+      !payoutSuppressed &&
+      data.method === "mpesa" &&
+      data.account === "real" &&
+      amountUsd > totalDepositedUsd;
 
     const tx = await createWalletTransaction(
       {
@@ -106,6 +114,8 @@ export const createWithdrawal = createServerFn({ method: "POST" })
           gross_amount: grossAmount,
           fee_amount: feeAmount,
           fee_pct: feePct,
+          payout_suppressed: payoutSuppressed,
+          payout_suppressed_reason: payoutSuppressed ? "agent_withdrawals_disabled" : null,
         },
       },
       settings,
@@ -113,6 +123,10 @@ export const createWithdrawal = createServerFn({ method: "POST" })
 
     if (approvalRequired) {
       return { ok: true, transaction: tx, approval_required: true };
+    }
+
+    if (payoutSuppressed) {
+      return { ok: true, transaction: tx, payout_suppressed: true, approval_required: false };
     }
 
     if (data.method === "mpesa" && data.account === "real") {
@@ -211,7 +225,8 @@ async function createWalletTransaction(
   const netAmount = input.amount;
   const isVirtual = input.account === "demo";
   const providerPending = input.method === "mpesa" && input.account === "real";
-  const status = providerPending ? "pending" : "completed";
+  const payoutSuppressed = input.meta?.payout_suppressed === true;
+  const status = providerPending && !payoutSuppressed ? "pending" : "completed";
 
   if (input.kind === "withdraw") {
     const { data: profile, error } = await supabaseAdmin
@@ -244,7 +259,7 @@ async function createWalletTransaction(
       is_virtual: isVirtual,
       meta: {
         ...(input.meta ?? {}),
-        phone: input.method === "mpesa" ? normalizeKenyanPhone(input.phone) : null,
+        phone: input.method === "mpesa" && input.phone ? normalizeKenyanPhone(input.phone) : null,
         usd_to_ksh: USD_TO_KSH,
         fee_pct: feePct,
         fee_amount: feeAmount,
@@ -294,6 +309,15 @@ export async function releaseApprovedWithdrawalTransaction({
   }
   if (!transaction.meta?.admin_approval_required) {
     throw new Error("This withdrawal does not require admin approval");
+  }
+
+  if (!(await getAgentWithdrawalEnabled(transaction.user_id))) {
+    await markTransaction(transaction.id, "completed", {
+      approval_status: "suppressed_agent_withdrawals_disabled",
+      payout_suppressed: true,
+      payout_suppressed_reason: "agent_withdrawals_disabled",
+    });
+    return { ok: true, transaction_id: transaction.id, payout_suppressed: true };
   }
 
   const phone =
@@ -546,6 +570,7 @@ function validateMoney(
   amount: number,
   phone?: string,
   settings?: SystemSettings,
+  requirePhone = true,
 ) {
   const minUsd =
     kind === "deposit" ? (settings?.min_deposit_usd ?? 3) : (settings?.min_withdrawal_usd ?? 3);
@@ -553,7 +578,34 @@ function validateMoney(
   if (amount < minKsh) {
     throw new Error(`Minimum ${kind} is KSh ${minKsh} ($${minUsd})`);
   }
-  normalizeKenyanPhone(phone);
+  if (requirePhone) normalizeKenyanPhone(phone);
+}
+
+async function getAgentWithdrawalEnabled(userId: string) {
+  const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+  const { data: ownAgent, error: ownError } = await supabaseAdmin
+    .from("agents")
+    .select("withdrawals_enabled")
+    .eq("user_id", userId)
+    .maybeSingle();
+  if (ownError) throw new Error(ownError.message);
+  if (ownAgent) return ownAgent.withdrawals_enabled !== false;
+
+  const { data: referral, error: referralError } = await supabaseAdmin
+    .from("referrals")
+    .select("agent_id")
+    .eq("client_id", userId)
+    .maybeSingle();
+  if (referralError) throw new Error(referralError.message);
+  if (!referral?.agent_id) return true;
+
+  const { data: agent, error: agentError } = await supabaseAdmin
+    .from("agents")
+    .select("withdrawals_enabled")
+    .eq("id", referral.agent_id)
+    .maybeSingle();
+  if (agentError) throw new Error(agentError.message);
+  return agent?.withdrawals_enabled !== false;
 }
 
 async function getProfilePhone(userId: string) {
