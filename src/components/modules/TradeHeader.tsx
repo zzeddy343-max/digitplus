@@ -77,8 +77,8 @@ export function TradeHeader({
             <SheetContent side="left" className="w-72 bg-background border-border p-0">
               <SheetHeader className="px-5 pt-5 pb-3 border-b border-border">
                 <SheetTitle className="flex items-center gap-2">
-                  <img src={LOGO_URL} alt="Megaflip" className="h-8 w-8 object-contain" />
-                  <span className="text-base font-extrabold tracking-tight">MEGAFLIP</span>
+                  <img src={LOGO_URL} alt="DigitPlus" className="h-8 w-8 object-contain" />
+                  <span className="text-base font-extrabold tracking-tight">DigitPlus</span>
                 </SheetTitle>
               </SheetHeader>
               <nav className="p-2 space-y-1">
@@ -89,9 +89,9 @@ export function TradeHeader({
 
           {/* Logo */}
           <Link to="/" className="flex items-center gap-2.5 hover:opacity-80 transition-opacity">
-            <img src={LOGO_URL} alt="MEGAFLIP" className="h-8 w-8 object-contain" />
+            <img src={LOGO_URL} alt="DigitPlus" className="h-8 w-8 object-contain" />
             <span className="hidden sm:inline text-base font-extrabold tracking-wider text-foreground">
-              MEGAFLIP
+              DigitPlus
             </span>
           </Link>
         </div>

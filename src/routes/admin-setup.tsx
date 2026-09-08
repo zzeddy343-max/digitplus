@@ -8,7 +8,7 @@ import { createAdminWithSetupPassword, verifyAdminSetupPassword } from "@/lib/au
 
 export const Route = createFileRoute("/admin-setup")({
   ssr: false,
-  head: () => ({ meta: [{ title: "Admin setup - MEGAFLIP" }] }),
+  head: () => ({ meta: [{ title: "Admin setup - DigitPlus" }] }),
   component: AdminSetupPage,
 });
 
@@ -69,8 +69,8 @@ function AdminSetupPage() {
     <div className="min-h-screen grid place-items-center bg-background px-4 py-8 text-foreground">
       <div className="w-full max-w-md">
         <div className="mb-6 text-center">
-          <img src={LOGO_URL} alt="MEGAFLIP" className="mx-auto mb-2 h-14 w-14 object-contain" />
-          <div className="text-xl font-extrabold tracking-wider">MEGAFLIP</div>
+          <img src={LOGO_URL} alt="DigitPlus" className="mx-auto mb-2 h-14 w-14 object-contain" />
+          <div className="text-xl font-extrabold tracking-wider">DigitPlus</div>
           <p className="mt-1 text-xs text-muted-foreground">Protected admin registration</p>
         </div>
 
