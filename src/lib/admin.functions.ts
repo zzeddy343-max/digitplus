@@ -21,6 +21,8 @@ type RpcAdminClient = {
   ) => Promise<{ data: unknown; error: { message: string } | null }>;
 };
 
+type AgentBalanceAction = "credit" | "debit";
+
 type ReportClient = {
   id: string;
   email?: string | null;
@@ -107,6 +109,12 @@ function emptyAccountsReport() {
       clients: 0,
       deposits_usd: 0,
       withdrawals_usd: 0,
+      fees_usd: 0,
+      net_cashflow_usd: 0,
+      profit_usd: 0,
+      losses_usd: 0,
+      pending_deposits: 0,
+      pending_withdrawals: 0,
       stakes_usd: 0,
       retained_usd: 0,
       user_balances_usd: 0,
@@ -230,16 +238,87 @@ export const creditAgentVirtual = createServerFn({ method: "POST" })
     return { ok: true };
   });
 
+export const adjustAgentBalance = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((d: unknown) =>
+    z
+      .object({
+        agent_user_id: z.string().uuid(),
+        amount_usd: z.number().positive().max(1_000_000),
+        account: z.enum(["real", "demo"]).default("real"),
+        action: z.enum(["credit", "debit"] satisfies [AgentBalanceAction, AgentBalanceAction]),
+        reason: z.string().trim().max(240).optional(),
+      })
+      .parse(d),
+  )
+  .handler(async ({ data, context }) => {
+    await assertAdmin(context.supabase, context.userId);
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const { data: agent, error: agentError } = await supabaseAdmin
+      .from("agents")
+      .select("user_id")
+      .eq("user_id", data.agent_user_id)
+      .maybeSingle();
+    if (agentError) throw new Error(agentError.message);
+    if (!agent) throw new Error("Agent not found");
+
+    const delta = data.action === "credit" ? data.amount_usd : -data.amount_usd;
+    const { error: balanceError } = await (supabaseAdmin as unknown as RpcAdminClient).rpc(
+      "adjust_wallet_balance",
+      {
+        _user_id: data.agent_user_id,
+        _account_type: data.account,
+        _usd_delta: delta,
+        _ksh_delta: 0,
+      },
+    );
+    if (balanceError) throw new Error(balanceError.message);
+
+    const { error: transactionError } = await supabaseAdmin.from("transactions").insert({
+      user_id: data.agent_user_id,
+      kind: data.action === "credit" ? "admin_credit" : "admin_debit",
+      method: "system",
+      amount: data.amount_usd,
+      currency: "USD",
+      amount_usd: data.amount_usd,
+      status: "completed",
+      account_type: data.account,
+      is_virtual: data.account === "demo",
+      meta: {
+        adjusted_by: context.userId,
+        reason: data.reason ?? null,
+        balance_action: data.action,
+      },
+    } as Record<string, unknown>);
+    if (transactionError) throw new Error(transactionError.message);
+
+    return { ok: true, action: data.action, account: data.account };
+  });
+
 export const listAgents = createServerFn({ method: "GET" })
   .middleware([requireSupabaseAuth])
   .handler(async ({ context }) => {
     await assertAdmin(context.supabase, context.userId);
-    const { data, error } = await context.supabase
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const { data, error } = await supabaseAdmin
       .from("agent_rollups")
       .select("*")
       .order("client_count", { ascending: false });
     if (error) throw new Error(error.message);
-    return data ?? [];
+    const rows = data ?? [];
+    const ids = rows.map((row) => row.agent_user_id as string);
+    if (ids.length === 0) return [];
+    const { data: profiles, error: profileError } = await supabaseAdmin
+      .from("profiles")
+      .select("id,balance_usd,demo_balance_usd")
+      .in("id", ids);
+    if (profileError) throw new Error(profileError.message);
+    const profileMap = new Map((profiles ?? []).map((profile) => [profile.id, profile]));
+    return rows.map((row) => ({
+      ...row,
+      balance_usd: profileMap.get(row.agent_user_id as string)?.balance_usd ?? 0,
+      demo_balance_usd: profileMap.get(row.agent_user_id as string)?.demo_balance_usd ?? 0,
+    }));
   });
 
 export const listClients = createServerFn({ method: "GET" })
@@ -600,7 +679,7 @@ export const getAccountsReport = createServerFn({ method: "POST" })
       .from("profiles")
       .select("id,email,full_name,username,balance_usd,created_at")
       .order("created_at", { ascending: false })
-      .limit(500);
+      .limit(5000);
     if (clientIds) profilesQ = profilesQ.in("id", clientIds);
     const { data: clients, error: clientsError } = await profilesQ;
     if (clientsError) throw new Error(clientsError.message);
@@ -646,9 +725,8 @@ export const getAccountsReport = createServerFn({ method: "POST" })
       )
       .in("user_id", filteredIds)
       .eq("account_type", "real")
-      .eq("is_virtual", false)
       .order("created_at", { ascending: false })
-      .limit(1000);
+      .limit(5000);
     if (from) txQ = txQ.gte("created_at", from);
     if (to) txQ = txQ.lte("created_at", to);
     const { data: transactions, error: txError } = await txQ;
@@ -680,14 +758,10 @@ export const getAccountsReport = createServerFn({ method: "POST" })
     const reportTransactions = (transactions ?? []) as ReportTransaction[];
     const reportTrades = (trades ?? []) as ReportTrade[];
     const clientMap = new Map(reportClients.map((c) => [c.id, c]));
-    const deposits = (transactions ?? []).filter(
-      (t: ReportTransaction) => t.kind === "deposit" && t.method === "mpesa",
-    );
+    const deposits = (transactions ?? []).filter((t: ReportTransaction) => t.kind === "deposit");
     const withdrawals = reportTransactions.filter((t) => t.kind === "withdraw");
     const completedTransactions = reportTransactions.filter((t) => t.status === "completed");
-    const completedDeposits = completedTransactions.filter(
-      (t) => t.kind === "deposit" && t.method === "mpesa",
-    );
+    const completedDeposits = completedTransactions.filter((t) => t.kind === "deposit");
     const completedWithdrawals = completedTransactions.filter((t) => t.kind === "withdraw");
     const feeTotal = completedTransactions.reduce((sum, t) => sum + transactionFee(t), 0);
     const depositFees = completedDeposits.reduce((sum, t) => sum + transactionFee(t), 0);

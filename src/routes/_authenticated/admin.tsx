@@ -27,13 +27,13 @@ import {
   createAdminAccount,
   createAccountMetricAdjustment,
   createAgent,
-  creditAgentVirtual,
   demoteUserRole,
   failStaleMpesaWithdrawals,
   approveWithdrawalApprovalRequest,
   listAccountMetricAdjustments,
   listAdmins,
   listAgents,
+  adjustAgentBalance,
   listClients,
   listWithdrawalApprovalRequests,
   moderateClientAccount,
@@ -110,6 +110,8 @@ type AgentRow = {
   total_deposits: number | string;
   total_withdrawals: number | string;
   house_retained: number | string;
+  balance_usd?: number | string | null;
+  demo_balance_usd?: number | string | null;
 };
 
 type AdminRow = {
@@ -1679,7 +1681,7 @@ function TradesTab() {
 function AgentsTab() {
   const agentsFn = useServerFn(listAgents);
   const create = useServerFn(createAgent);
-  const credit = useServerFn(creditAgentVirtual);
+  const adjustBalance = useServerFn(adjustAgentBalance);
   const demote = useServerFn(demoteUserRole);
   const resetBalances = useServerFn(resetUserBalances);
   const qc = useQueryClient();
@@ -1694,6 +1696,8 @@ function AgentsTab() {
 
   const [creditOpen, setCreditOpen] = useState<string | null>(null); // agent_user_id
   const [creditAmount, setCreditAmount] = useState("1000");
+  const [balanceAction, setBalanceAction] = useState<"credit" | "debit">("credit");
+  const [balanceAccount, setBalanceAccount] = useState<"real" | "demo">("real");
   const agentRows = agents as AgentRow[];
 
   const createMut = useMutation({
@@ -1707,10 +1711,18 @@ function AgentsTab() {
     onError: (e) => toast.error(e instanceof Error ? e.message : "Failed"),
   });
 
-  const creditMut = useMutation({
-    mutationFn: (vars: { agent_user_id: string; amount_usd: number }) => credit({ data: vars }),
+  const balanceMut = useMutation({
+    mutationFn: (vars: { agent_user_id: string; amount_usd: number }) =>
+      adjustBalance({
+        data: {
+          agent_user_id: vars.agent_user_id,
+          amount_usd: vars.amount_usd,
+          action: balanceAction,
+          account: balanceAccount,
+        },
+      }),
     onSuccess: () => {
-      toast.success("Virtual credit granted");
+      toast.success(`${balanceAction === "credit" ? "Added" : "Deducted"} agent balance`);
       setCreditOpen(null);
       qc.invalidateQueries({ queryKey: ["admin-agents"] });
     },
@@ -1807,8 +1819,28 @@ function AgentsTab() {
             <Cell label="Withdraws" v={`$${Number(a.total_withdrawals).toFixed(0)}`} bear />
             <Cell label="House" v={`$${Number(a.house_retained).toFixed(0)}`} bull />
           </div>
+          <div className="grid grid-cols-2 gap-1 text-center text-[10px]">
+            <Cell label="Real balance" v={`$${Number(a.balance_usd ?? 0).toFixed(2)}`} />
+            <Cell label="Demo balance" v={`$${Number(a.demo_balance_usd ?? 0).toFixed(2)}`} />
+          </div>
           {creditOpen === a.agent_user_id ? (
             <div className="flex items-center gap-1.5 pt-1">
+              <select
+                value={balanceAction}
+                onChange={(e) => setBalanceAction(e.target.value as "credit" | "debit")}
+                className="w-20 px-1.5 py-1.5 rounded-lg bg-surface border border-border text-xs font-bold"
+              >
+                <option value="credit">Add</option>
+                <option value="debit">Deduct</option>
+              </select>
+              <select
+                value={balanceAccount}
+                onChange={(e) => setBalanceAccount(e.target.value as "real" | "demo")}
+                className="w-20 px-1.5 py-1.5 rounded-lg bg-surface border border-border text-xs font-bold"
+              >
+                <option value="real">Real</option>
+                <option value="demo">Demo</option>
+              </select>
               <input
                 value={creditAmount}
                 onChange={(e) => setCreditAmount(e.target.value)}
@@ -1817,15 +1849,20 @@ function AgentsTab() {
               />
               <button
                 onClick={() =>
-                  creditMut.mutate({
+                  balanceMut.mutate({
                     agent_user_id: a.agent_user_id,
                     amount_usd: Number(creditAmount),
                   })
                 }
-                disabled={creditMut.isPending}
-                className="px-3 py-1.5 rounded-lg bg-bull text-bull-foreground font-bold text-xs disabled:opacity-50"
+                disabled={balanceMut.isPending}
+                className={
+                  "px-3 py-1.5 rounded-lg font-bold text-xs disabled:opacity-50 " +
+                  (balanceAction === "credit"
+                    ? "bg-bull text-bull-foreground"
+                    : "bg-bear text-bear-foreground")
+                }
               >
-                Credit
+                {balanceAction === "credit" ? "Add" : "Deduct"}
               </button>
               <button
                 onClick={() => setCreditOpen(null)}
@@ -1840,10 +1877,12 @@ function AgentsTab() {
                 onClick={() => {
                   setCreditOpen(a.agent_user_id);
                   setCreditAmount("1000");
+                  setBalanceAction("credit");
+                  setBalanceAccount("real");
                 }}
                 className="py-1.5 rounded-lg bg-surface border border-border text-xs font-bold flex items-center justify-center gap-1.5"
               >
-                <Wallet className="h-3 w-3" /> Credit
+                <Wallet className="h-3 w-3" /> Add / deduct
               </button>
               <button
                 onClick={() => {
