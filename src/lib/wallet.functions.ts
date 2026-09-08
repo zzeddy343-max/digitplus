@@ -1,11 +1,7 @@
 import { createServerFn } from "@tanstack/react-start";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 import { z } from "zod";
-import {
-  calculateNetWithdrawalAmount,
-  readSystemSettings,
-  type SystemSettings,
-} from "@/lib/system-settings";
+import { readSystemSettings, type SystemSettings } from "@/lib/system-settings";
 
 const USD_TO_KSH = 130;
 
@@ -34,6 +30,13 @@ type WalletTransaction = {
 
 type DarajaMode = "stk" | "b2c";
 type DarajaStep = "oauth_token" | "stk_push" | "b2c_payment";
+
+type WalletRpcClient = {
+  rpc: (
+    name: string,
+    args: Record<string, unknown>,
+  ) => Promise<{ error: { message?: string } | null }>;
+};
 
 export const createDeposit = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
@@ -77,10 +80,12 @@ export const createWithdrawal = createServerFn({ method: "POST" })
     }
 
     const settings = await readSystemSettings();
-    const netAmount = calculateNetWithdrawalAmount(data.amount, settings.withdrawal_tax_pct);
+    const feePct = settings.withdrawal_fee_pct ?? settings.withdrawal_tax_pct;
+    const feeAmount = calculateFee(data.amount, feePct);
+    const grossAmount = roundMoney(data.amount + feeAmount);
     const phone = data.method === "mpesa" ? await getProfilePhone(context.userId) : data.phone;
     validateMoney("withdraw", data.method, data.amount, phone, settings);
-    const amountUsd = toUsd(data.amount, "KSH");
+    const amountUsd = toUsd(grossAmount, "KSH");
     const totalDepositedUsd = await getCompletedRealDepositTotal(context.userId);
     const approvalRequired =
       data.method === "mpesa" && data.account === "real" && amountUsd > totalDepositedUsd;
@@ -97,7 +102,10 @@ export const createWithdrawal = createServerFn({ method: "POST" })
           admin_approval_required: approvalRequired,
           approval_status: approvalRequired ? "pending" : "not_required",
           total_deposited_usd_at_request: totalDepositedUsd,
-          requested_amount_usd: amountUsd,
+          requested_amount_usd: toUsd(data.amount, "KSH"),
+          gross_amount: grossAmount,
+          fee_amount: feeAmount,
+          fee_pct: feePct,
         },
       },
       settings,
@@ -109,7 +117,7 @@ export const createWithdrawal = createServerFn({ method: "POST" })
 
     if (data.method === "mpesa" && data.account === "real") {
       try {
-        const daraja = await sendB2cPayment(tx, phone, netAmount);
+        const daraja = await sendB2cPayment(tx, phone, data.amount);
         return { ok: true, transaction: tx, daraja, approval_required: false };
       } catch (error) {
         await markTransaction(tx.id, "failed", { provider_error: getErrorMessage(error) });
@@ -196,11 +204,11 @@ async function createWalletTransaction(
   }
 
   const currency = input.method === "mpesa" ? "KSH" : "USD";
-  const amountUsd = toUsd(input.amount, currency);
-  const netAmount =
-    input.kind === "withdraw"
-      ? calculateNetWithdrawalAmount(input.amount, settings.withdrawal_tax_pct)
-      : input.amount;
+  const feePct = input.kind === "deposit" ? settings.deposit_fee_pct : settings.withdrawal_fee_pct;
+  const feeAmount = calculateFee(input.amount, feePct);
+  const grossAmount = roundMoney(input.amount + feeAmount);
+  const amountUsd = toUsd(input.kind === "withdraw" ? grossAmount : input.amount, currency);
+  const netAmount = input.amount;
   const isVirtual = input.account === "demo";
   const providerPending = input.method === "mpesa" && input.account === "real";
   const status = providerPending ? "pending" : "completed";
@@ -229,7 +237,7 @@ async function createWalletTransaction(
       kind: input.kind,
       method: input.method,
       account_type: input.account,
-      amount: input.amount,
+      amount: input.kind === "withdraw" ? grossAmount : input.amount,
       currency,
       amount_usd: amountUsd,
       status,
@@ -238,8 +246,10 @@ async function createWalletTransaction(
         ...(input.meta ?? {}),
         phone: input.method === "mpesa" ? normalizeKenyanPhone(input.phone) : null,
         usd_to_ksh: USD_TO_KSH,
-        withdrawal_tax_pct: input.kind === "withdraw" ? settings.withdrawal_tax_pct : null,
-        net_amount: input.kind === "withdraw" ? netAmount : null,
+        fee_pct: feePct,
+        fee_amount: feeAmount,
+        gross_amount: grossAmount,
+        net_amount: netAmount,
       },
     } as Record<string, unknown>)
     .select("*")
@@ -282,15 +292,13 @@ export async function releaseApprovedWithdrawalTransaction({
   if (!["pending", "processing"].includes(transaction.status)) {
     throw new Error("This withdrawal is no longer pending approval");
   }
-  if (!Boolean(transaction.meta?.admin_approval_required)) {
+  if (!transaction.meta?.admin_approval_required) {
     throw new Error("This withdrawal does not require admin approval");
   }
 
-  const phone = getStringValue(transaction.meta?.phone) ?? (await getProfilePhone(transaction.user_id));
-  const payoutAmount = Number(
-    transaction.meta?.net_amount ??
-      calculateNetWithdrawalAmount(Number(transaction.amount), settings.withdrawal_tax_pct),
-  );
+  const phone =
+    getStringValue(transaction.meta?.phone) ?? (await getProfilePhone(transaction.user_id));
+  const payoutAmount = Number(transaction.meta?.net_amount ?? transaction.amount);
 
   await markTransaction(transaction.id, "processing", {
     approval_status: "approved",
@@ -339,7 +347,7 @@ async function sendStkPush(transaction: WalletTransaction, phone?: string) {
     Password: password,
     Timestamp: timestamp,
     TransactionType: "CustomerPayBillOnline",
-    Amount: Math.round(Number(transaction.amount)),
+    Amount: Math.round(Number(transaction.meta?.gross_amount ?? transaction.amount)),
     PartyA: msisdn,
     PartyB: env.stkShortcode,
     PhoneNumber: msisdn,
@@ -466,29 +474,20 @@ async function adjustBalance(
   kshDelta: number,
 ) {
   const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-  const { data: profile, error } = await supabaseAdmin
-    .from("profiles")
-    .select("balance_usd, demo_balance_usd, balance_ksh")
-    .eq("id", userId)
-    .single();
-  if (error || !profile) throw new Error("Profile not found");
+  const { error } = await (supabaseAdmin as unknown as WalletRpcClient).rpc(
+    "adjust_wallet_balance",
+    {
+      _user_id: userId,
+      _account_type: account,
+      _usd_delta: usdDelta,
+      _ksh_delta: currency === "KSH" ? kshDelta : 0,
+    },
+  );
+  if (error) throw new Error(error.message);
+}
 
-  const update =
-    account === "real"
-      ? {
-          balance_usd: Number(profile.balance_usd ?? 0) + usdDelta,
-          balance_ksh: Number(profile.balance_ksh ?? 0) + (currency === "KSH" ? kshDelta : 0),
-        }
-      : {
-          demo_balance_usd: Number(profile.demo_balance_usd ?? 0) + usdDelta,
-          balance_ksh: Number(profile.balance_ksh ?? 0) + (currency === "KSH" ? kshDelta : 0),
-        };
-
-  const { error: updateError } = await supabaseAdmin
-    .from("profiles")
-    .update(update as Record<string, unknown>)
-    .eq("id", userId);
-  if (updateError) throw new Error(updateError.message);
+function calculateFee(amount: number, percentage: number) {
+  return roundMoney((amount * Math.max(0, Math.min(100, Number(percentage ?? 0)))) / 100);
 }
 
 async function markTransaction(

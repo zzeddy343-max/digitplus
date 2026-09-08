@@ -241,14 +241,14 @@ function AdminPage() {
               ? "Accounts"
               : k === "withdrawals"
                 ? "Withdraws"
-              : k === "ledger"
-                ? "Ledger"
-                : k[0].toUpperCase() + k.slice(1)}
+                : k === "ledger"
+                  ? "Ledger"
+                  : k[0].toUpperCase() + k.slice(1)}
           </button>
         ))}
       </div>
 
-      {tab === "accounts" && <AccountsReportPanel scope="admin" />}
+      {tab === "accounts" && <AccountsReportPanel scope="admin" mode="all_time" />}
       {tab === "users" && <UsersTab />}
       {tab === "trades" && <TradesTab />}
       {tab === "agents" && <AgentsTab />}
@@ -485,7 +485,8 @@ function SettingsTab() {
   });
   const [minDeposit, setMinDeposit] = useState("3");
   const [minWithdrawal, setMinWithdrawal] = useState("3");
-  const [taxPct, setTaxPct] = useState("5");
+  const [depositFeePct, setDepositFeePct] = useState("5");
+  const [withdrawalFeePct, setWithdrawalFeePct] = useState("5");
   const [rtp, setRtp] = useState("95");
   const [minStake, setMinStake] = useState("1");
   const [maxStake, setMaxStake] = useState("1000");
@@ -512,7 +513,10 @@ function SettingsTab() {
     if (!settings) return;
     setMinDeposit(String(Number(settings.min_deposit_usd ?? 3)));
     setMinWithdrawal(String(Number(settings.min_withdrawal_usd ?? 3)));
-    setTaxPct(String(Number(settings.withdrawal_tax_pct ?? 5)));
+    setDepositFeePct(String(Number(settings.deposit_fee_pct ?? 5)));
+    setWithdrawalFeePct(
+      String(Number(settings.withdrawal_fee_pct ?? settings.withdrawal_tax_pct ?? 5)),
+    );
     setRtp(String(Number(settings.rtp_percent ?? 95)));
     setMinStake(String(Number(settings.limits_min_stake_usd ?? 1)));
     setMaxStake(String(Number(settings.limits_max_stake_usd ?? 1000)));
@@ -548,8 +552,18 @@ function SettingsTab() {
           min_withdrawal_usd: Number(
             coreSettingsEnabled ? minWithdrawal || 0 : DEFAULT_SYSTEM_SETTINGS.min_withdrawal_usd,
           ),
+          deposit_fee_pct: Number(
+            coreSettingsEnabled ? depositFeePct || 0 : DEFAULT_SYSTEM_SETTINGS.deposit_fee_pct,
+          ),
+          withdrawal_fee_pct: Number(
+            coreSettingsEnabled
+              ? withdrawalFeePct || 0
+              : DEFAULT_SYSTEM_SETTINGS.withdrawal_fee_pct,
+          ),
           withdrawal_tax_pct: Number(
-            coreSettingsEnabled ? taxPct || 0 : DEFAULT_SYSTEM_SETTINGS.withdrawal_tax_pct,
+            coreSettingsEnabled
+              ? withdrawalFeePct || 0
+              : DEFAULT_SYSTEM_SETTINGS.withdrawal_tax_pct,
           ),
           rtp_percent: Number(coreSettingsEnabled ? rtp || 0 : DEFAULT_SYSTEM_SETTINGS.rtp_percent),
           limits_min_stake_usd: Number(
@@ -608,7 +622,7 @@ function SettingsTab() {
       </div>
       <p className="text-[11px] text-muted-foreground">
         Control staking limits, volatility behavior, risk caps, segmentation tags, fraud automation,
-        engagement events, and VAT retention from one admin dashboard.
+        engagement events, and deposit/withdrawal fees from one admin dashboard.
       </p>
       {isLoading ? (
         <div className="text-sm text-muted-foreground">Loading settings…</div>
@@ -649,9 +663,21 @@ function SettingsTab() {
                   type="number"
                 />
                 <LabeledInput
-                  label="VAT retention (%)"
-                  value={coreSettingsEnabled ? taxPct : DEFAULT_SYSTEM_SETTINGS.withdrawal_tax_pct}
-                  onChange={setTaxPct}
+                  label="Deposit fee (%)"
+                  value={
+                    coreSettingsEnabled ? depositFeePct : DEFAULT_SYSTEM_SETTINGS.deposit_fee_pct
+                  }
+                  onChange={setDepositFeePct}
+                  type="number"
+                />
+                <LabeledInput
+                  label="Withdrawal fee (%)"
+                  value={
+                    coreSettingsEnabled
+                      ? withdrawalFeePct
+                      : DEFAULT_SYSTEM_SETTINGS.withdrawal_fee_pct
+                  }
+                  onChange={setWithdrawalFeePct}
                   type="number"
                 />
                 <LabeledInput

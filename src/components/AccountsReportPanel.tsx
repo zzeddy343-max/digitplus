@@ -144,6 +144,28 @@ export function AccountsReportPanel({
             bull
           />
           <ReportStat
+            icon={<DollarSign className="h-3.5 w-3.5" />}
+            label="Fees earned"
+            value={money(data?.summary.fees_usd)}
+            bull
+          />
+          <ReportStat
+            icon={<TrendingUp className="h-3.5 w-3.5" />}
+            label="Net cash flow"
+            value={money(data?.summary.net_cashflow_usd)}
+          />
+          <ReportStat
+            icon={<TrendingUp className="h-3.5 w-3.5" />}
+            label="System profit"
+            value={money(data?.summary.profit_usd)}
+            bull
+          />
+          <ReportStat
+            icon={<DollarSign className="h-3.5 w-3.5" />}
+            label="Pending D/W"
+            value={`${data?.summary.pending_deposits ?? 0} / ${data?.summary.pending_withdrawals ?? 0}`}
+          />
+          <ReportStat
             icon={<TrendingUp className="h-3.5 w-3.5" />}
             label="Trades"
             value={String(data?.summary.trades ?? 0)}

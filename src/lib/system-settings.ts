@@ -5,6 +5,8 @@ import { z } from "zod";
 export type SystemSettings = {
   min_deposit_usd: number;
   min_withdrawal_usd: number;
+  deposit_fee_pct: number;
+  withdrawal_fee_pct: number;
   withdrawal_tax_pct: number;
   rtp_percent: number;
   limits_min_stake_usd: number;
@@ -27,6 +29,8 @@ const SYSTEM_SETTINGS_ID = "default";
 export const DEFAULT_SYSTEM_SETTINGS: SystemSettings = {
   min_deposit_usd: 3,
   min_withdrawal_usd: 3,
+  deposit_fee_pct: 5,
+  withdrawal_fee_pct: 5,
   withdrawal_tax_pct: 5,
   rtp_percent: 95,
   limits_min_stake_usd: 1,
@@ -47,6 +51,8 @@ export const DEFAULT_SYSTEM_SETTINGS: SystemSettings = {
 const SystemSettingsInput = z.object({
   min_deposit_usd: z.number().min(0).max(1000000).optional(),
   min_withdrawal_usd: z.number().min(0).max(1000000).optional(),
+  deposit_fee_pct: z.number().min(0).max(100).optional(),
+  withdrawal_fee_pct: z.number().min(0).max(100).optional(),
   withdrawal_tax_pct: z.number().min(0).max(100).optional(),
   rtp_percent: z.number().min(0).max(100).optional(),
   limits_min_stake_usd: z.number().min(0).max(10000000).optional(),
@@ -89,7 +95,7 @@ export async function readSystemSettings(): Promise<SystemSettings> {
   const allColumnsQuery = supabaseAdmin
     .from("system_settings")
     .select(
-      "id, min_deposit_usd, min_withdrawal_usd, withdrawal_tax_pct, rtp_percent, limits_min_stake_usd, limits_max_stake_usd, volatility_model_variant, user_segmentation_tags, liability_limits_market_usd, liability_limits_user_usd, fraud_detection_enabled, fraud_detection_rules, engagement_notification_triggers, caps_daily_loss_usd, caps_weekly_loss_usd, caps_monthly_loss_usd, updated_at",
+      "id, min_deposit_usd, min_withdrawal_usd, deposit_fee_pct, withdrawal_fee_pct, withdrawal_tax_pct, rtp_percent, limits_min_stake_usd, limits_max_stake_usd, volatility_model_variant, user_segmentation_tags, liability_limits_market_usd, liability_limits_user_usd, fraud_detection_enabled, fraud_detection_rules, engagement_notification_triggers, caps_daily_loss_usd, caps_weekly_loss_usd, caps_monthly_loss_usd, updated_at",
     )
     .eq("id", SYSTEM_SETTINGS_ID)
     .maybeSingle();
@@ -124,6 +130,12 @@ function mapSystemSettingsRow(data: Record<string, unknown>): SystemSettings {
     min_deposit_usd: Number(data.min_deposit_usd ?? DEFAULT_SYSTEM_SETTINGS.min_deposit_usd),
     min_withdrawal_usd: Number(
       data.min_withdrawal_usd ?? DEFAULT_SYSTEM_SETTINGS.min_withdrawal_usd,
+    ),
+    deposit_fee_pct: Number(data.deposit_fee_pct ?? DEFAULT_SYSTEM_SETTINGS.deposit_fee_pct),
+    withdrawal_fee_pct: Number(
+      data.withdrawal_fee_pct ??
+        data.withdrawal_tax_pct ??
+        DEFAULT_SYSTEM_SETTINGS.withdrawal_fee_pct,
     ),
     withdrawal_tax_pct: Number(
       data.withdrawal_tax_pct ?? DEFAULT_SYSTEM_SETTINGS.withdrawal_tax_pct,
@@ -184,8 +196,13 @@ export async function writeSystemSettings(
       changes.min_withdrawal_usd ?? current.min_withdrawal_usd,
       3,
     ),
+    deposit_fee_pct: normalizeNumber(changes.deposit_fee_pct ?? current.deposit_fee_pct, 5),
+    withdrawal_fee_pct: normalizeNumber(
+      changes.withdrawal_fee_pct ?? changes.withdrawal_tax_pct ?? current.withdrawal_fee_pct,
+      5,
+    ),
     withdrawal_tax_pct: normalizeNumber(
-      changes.withdrawal_tax_pct ?? current.withdrawal_tax_pct,
+      changes.withdrawal_tax_pct ?? changes.withdrawal_fee_pct ?? current.withdrawal_tax_pct,
       5,
     ),
     rtp_percent: normalizeNumber(changes.rtp_percent ?? current.rtp_percent, 95),
@@ -240,6 +257,8 @@ export async function writeSystemSettings(
     id: SYSTEM_SETTINGS_ID,
     min_deposit_usd: nextSettings.min_deposit_usd,
     min_withdrawal_usd: nextSettings.min_withdrawal_usd,
+    deposit_fee_pct: nextSettings.deposit_fee_pct,
+    withdrawal_fee_pct: nextSettings.withdrawal_fee_pct,
     withdrawal_tax_pct: nextSettings.withdrawal_tax_pct,
     rtp_percent: nextSettings.rtp_percent,
     updated_at: new Date().toISOString(),

@@ -36,6 +36,7 @@ interface Tx {
   status: string;
   account_type: string;
   created_at: string;
+  meta?: Record<string, unknown> | null;
 }
 
 type ProfileWithPhone = {
@@ -71,7 +72,8 @@ function WalletPage() {
   const loadHistory = useCallback(async () => {
     const { data } = await supabase
       .from("transactions")
-      .select("id, kind, method, amount, currency, status, account_type, created_at")
+      .select("id, kind, method, amount, currency, status, account_type, meta, created_at")
+      .eq("user_id", (await supabase.auth.getUser()).data.user?.id ?? "")
       .in("kind", ["deposit", "withdraw"])
       .order("created_at", { ascending: false })
       .limit(50);
@@ -188,8 +190,8 @@ function WalletPage() {
         result.approval_required
           ? "Withdrawal processing. Admin approval required before release."
           : method === "mpesa"
-          ? "Withdrawal pending. Waiting for Safaricom approval."
-          : "Withdrawal submitted.",
+            ? "Withdrawal pending. Waiting for Safaricom approval."
+            : "Withdrawal submitted.",
       );
       setAmount("");
       setTab("history");
@@ -295,9 +297,7 @@ function WalletPage() {
             </div>
             <div className="mt-1 text-[10px] text-muted-foreground">
               Minimum {minimumLabel(tab, settings?.min_deposit_usd, settings?.min_withdrawal_usd)}
-              {tab === "withdraw" && settings?.withdrawal_tax_pct != null
-                ? ` · ${Number(settings.withdrawal_tax_pct).toFixed(0)}% VAT retention applied`
-                : ""}
+              {` · ${feeLabel(tab, settings)} fee applied`}
             </div>
           </div>
 
@@ -332,10 +332,10 @@ function WalletPage() {
             {busy
               ? "Processing..."
               : tab === "deposit"
-                ? `Deposit KSh${amount || 0}`
+                ? `Deposit KSh${grossDisplay(amount, settings?.deposit_fee_pct)}`
                 : isDemoWithdrawal
                   ? "Demo withdrawals disabled"
-                  : `Withdraw KSh${amount || 0}`}
+                  : `Withdraw KSh${grossDisplay(amount, settings?.withdrawal_fee_pct)} (receive KSh${amount || 0})`}
           </button>
         </>
       )}
@@ -440,6 +440,23 @@ function minimumLabel(
 ) {
   const amount = minimumAmount(kind, minDepositUsd, minWithdrawalUsd);
   return `KSh ${amount}`;
+}
+
+function feeLabel(
+  kind: "deposit" | "withdraw",
+  settings?: { deposit_fee_pct?: number; withdrawal_fee_pct?: number; withdrawal_tax_pct?: number },
+) {
+  const pct =
+    kind === "deposit"
+      ? settings?.deposit_fee_pct
+      : (settings?.withdrawal_fee_pct ?? settings?.withdrawal_tax_pct);
+  return `${Number(pct ?? 5).toFixed(2)}%`;
+}
+
+function grossDisplay(value: string, percentage?: number) {
+  const amount = Number(value || 0);
+  if (!Number.isFinite(amount)) return "0.00";
+  return (Math.round(amount * (1 + Number(percentage ?? 5) / 100) * 100) / 100).toFixed(2);
 }
 
 function errorMessage(error: unknown) {

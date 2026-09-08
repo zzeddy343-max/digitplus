@@ -41,6 +41,7 @@ type ReportTransaction = {
   status: string;
   account_type?: string | null;
   is_virtual?: boolean | null;
+  meta?: Record<string, unknown> | null;
   created_at: string;
 };
 
@@ -641,12 +642,11 @@ export const getAccountsReport = createServerFn({ method: "POST" })
     let txQ = supabaseAdmin
       .from("transactions")
       .select(
-        "id,user_id,kind,method,amount,currency,amount_usd,status,account_type,is_virtual,created_at",
+        "id,user_id,kind,method,amount,currency,amount_usd,status,account_type,is_virtual,meta,created_at",
       )
       .in("user_id", filteredIds)
       .eq("account_type", "real")
       .eq("is_virtual", false)
-      .in("status", ["completed"])
       .order("created_at", { ascending: false })
       .limit(1000);
     if (from) txQ = txQ.gte("created_at", from);
@@ -684,6 +684,13 @@ export const getAccountsReport = createServerFn({ method: "POST" })
       (t: ReportTransaction) => t.kind === "deposit" && t.method === "mpesa",
     );
     const withdrawals = reportTransactions.filter((t) => t.kind === "withdraw");
+    const completedTransactions = reportTransactions.filter((t) => t.status === "completed");
+    const completedDeposits = completedTransactions.filter(
+      (t) => t.kind === "deposit" && t.method === "mpesa",
+    );
+    const completedWithdrawals = completedTransactions.filter((t) => t.kind === "withdraw");
+    const feeTotal = completedTransactions.reduce((sum, t) => sum + transactionFee(t), 0);
+    const depositFees = completedDeposits.reduce((sum, t) => sum + transactionFee(t), 0);
     const closedTrades = reportTrades.filter((t) => t.status !== "open");
     const houseRetained = closedTrades.reduce((sum, t) => {
       if (t.status === "lost") return sum + Number(t.stake ?? 0);
@@ -707,8 +714,12 @@ export const getAccountsReport = createServerFn({ method: "POST" })
         client_id: id,
         name: profile?.full_name || profile?.username || profile?.email || id.slice(0, 8),
         email: profile?.email ?? null,
-        deposits_usd: sumUsd(clientTx.filter((t) => t.kind === "deposit")),
-        withdrawals_usd: sumUsd(clientTx.filter((t) => t.kind === "withdraw")),
+        deposits_usd: sumUsd(
+          clientTx.filter((t) => t.kind === "deposit" && t.status === "completed"),
+        ),
+        withdrawals_usd: sumUsd(
+          clientTx.filter((t) => t.kind === "withdraw" && t.status === "completed"),
+        ),
         stakes_usd: clientTrades.reduce((s, t) => s + Number(t.stake ?? 0), 0),
         retained_usd: retained,
         trades: clientTrades.length,
@@ -719,8 +730,14 @@ export const getAccountsReport = createServerFn({ method: "POST" })
       clients: filteredClients,
       summary: {
         clients: filteredIds.length,
-        deposits_usd: sumUsd(deposits) + manual.deposits_usd,
-        withdrawals_usd: sumUsd(withdrawals) + manual.withdrawals_usd,
+        deposits_usd: sumUsd(completedDeposits) + manual.deposits_usd,
+        withdrawals_usd: sumUsd(completedWithdrawals) + manual.withdrawals_usd,
+        fees_usd: feeTotal,
+        net_cashflow_usd: sumUsd(completedDeposits) + depositFees - sumUsd(completedWithdrawals),
+        profit_usd: houseRetained + feeTotal + manual.retained_usd,
+        losses_usd: Math.max(0, -houseRetained),
+        pending_deposits: deposits.filter((t) => t.status !== "completed").length,
+        pending_withdrawals: withdrawals.filter((t) => t.status !== "completed").length,
         stakes_usd: reportTrades.reduce((s, t) => s + Number(t.stake ?? 0), 0) + manual.stakes_usd,
         retained_usd: houseRetained + manual.retained_usd,
         user_balances_usd: reportClients.reduce(
@@ -735,6 +752,14 @@ export const getAccountsReport = createServerFn({ method: "POST" })
       trades: reportTrades,
     };
   });
+
+function transactionFee(transaction: ReportTransaction) {
+  const raw = Number(transaction.meta?.fee_amount ?? 0);
+  if (Number.isFinite(raw) && raw > 0) {
+    return transaction.currency === "KSH" ? raw / 130 : raw;
+  }
+  return 0;
+}
 
 export const failStaleMpesaWithdrawals = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
