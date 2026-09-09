@@ -403,14 +403,18 @@ async function queryStkStatus(checkoutRequestId: string) {
     CheckoutRequestID: checkoutRequestId,
   };
 
-  const res = await fetch(`${env.baseUrl}/mpesa/stkpushquery/v1/query`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json",
+  const res = await fetchDaraja(
+    `${env.baseUrl}/mpesa/stkpushquery/v1/query`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
     },
-    body: JSON.stringify(payload),
-  });
+    "STK status query",
+  );
   const json = await res.json().catch(() => ({}));
   if (!res.ok) {
     throw new Error(formatDarajaError("stk", "stk_push", res.status, json, env.baseUrl));
@@ -462,14 +466,18 @@ async function darajaRequest(path: string, payload: Record<string, unknown>, mod
   const env = getDarajaEnv(mode);
   const token = await getDarajaToken(mode);
   const step: DarajaStep = mode === "stk" ? "stk_push" : "b2c_payment";
-  const res = await fetch(`${env.baseUrl}${path}`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json",
+  const res = await fetchDaraja(
+    `${env.baseUrl}${path}`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
     },
-    body: JSON.stringify(payload),
-  });
+    step === "stk_push" ? "STK push" : "B2C payment",
+  );
   const json = await res.json().catch(() => ({}));
   if (!res.ok) {
     throw new Error(formatDarajaError(mode, step, res.status, json, env.baseUrl));
@@ -480,14 +488,27 @@ async function darajaRequest(path: string, payload: Record<string, unknown>, mod
 async function getDarajaToken(mode: DarajaMode) {
   const env = getDarajaEnv(mode);
   const credentials = Buffer.from(`${env.consumerKey}:${env.consumerSecret}`).toString("base64");
-  const res = await fetch(`${env.baseUrl}/oauth/v1/generate?grant_type=client_credentials`, {
-    headers: { Authorization: `Basic ${credentials}` },
-  });
+  const res = await fetchDaraja(
+    `${env.baseUrl}/oauth/v1/generate?grant_type=client_credentials`,
+    { headers: { Authorization: `Basic ${credentials}` } },
+    "OAuth token request",
+  );
   const json = await res.json().catch(() => ({}));
   if (!res.ok || !json.access_token) {
     throw new Error(formatDarajaError(mode, "oauth_token", res.status, json, env.baseUrl));
   }
   return json.access_token as string;
+}
+
+async function fetchDaraja(url: string, init: RequestInit, operation: string) {
+  try {
+    return await fetch(url, init);
+  } catch (error) {
+    const detail = getErrorMessage(error);
+    throw new Error(
+      `Unable to reach Daraja during the ${operation}. Check DARAJA_BASE_URL and server network access. ${detail}`,
+    );
+  }
 }
 
 async function adjustBalance(
@@ -695,7 +716,21 @@ function readEnv(name: string) {
 }
 
 function normalizeDarajaBaseUrl(value: string) {
-  return value.replace(/\/+$/, "");
+  const normalized = value.trim().replace(/\/+$/, "");
+  let parsed: URL;
+  try {
+    parsed = new URL(normalized);
+  } catch {
+    throw new Error(
+      `Invalid DARAJA_BASE_URL. Use https://api.safaricom.co.ke for production or https://sandbox.safaricom.co.ke for sandbox.`,
+    );
+  }
+  if (parsed.protocol !== "https:") {
+    throw new Error(
+      `Invalid DARAJA_BASE_URL protocol. Use https://api.safaricom.co.ke for production or https://sandbox.safaricom.co.ke for sandbox.`,
+    );
+  }
+  return normalized;
 }
 
 function assertDarajaEnvironment(mode: DarajaMode, baseUrl: string) {

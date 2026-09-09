@@ -203,6 +203,15 @@ export function AppHeader() {
         <ChevronDown className="h-4 w-4 text-muted-foreground" />
       </button>
 
+      <Link
+        to="/wallet"
+        className="hidden lg:inline-flex h-10 items-center gap-2 rounded-lg border border-border bg-surface px-3 text-xs font-bold hover:border-primary/60 hover:text-primary"
+        aria-label="Open Wallet"
+      >
+        <Wallet className="h-4 w-4" />
+        <span>Wallet</span>
+      </Link>
+
       <button
         onClick={toggleTheme}
         className="hidden lg:grid h-11 w-11 place-items-center rounded-lg border border-border bg-surface text-primary"
@@ -214,12 +223,6 @@ export function AppHeader() {
       <div className="ml-auto lg:ml-0">
         <AccountSwitcher />
       </div>
-      <Link
-        to="/wallet"
-        className="hidden lg:inline-flex h-11 items-center rounded-full bg-primary px-6 text-sm font-extrabold text-primary-foreground"
-      >
-        Deposit
-      </Link>
       <Link
         to="/profile"
         className="hidden lg:grid h-11 w-11 place-items-center rounded-full border border-border bg-surface text-muted-foreground"

@@ -464,7 +464,7 @@ function grossDisplay(value: string, percentage?: number) {
 
 function errorMessage(error: unknown) {
   const message = getErrorMessage(error, "Request failed. Please try again.");
-  if (/failed to fetch|networkerror|load failed/i.test(message)) {
+  if (/failed to fetch|fetch failed|networkerror|load failed/i.test(message)) {
     return "Unable to reach the payment service. Check your connection and try again.";
   }
   if (
