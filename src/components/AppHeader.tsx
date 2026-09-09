@@ -205,7 +205,7 @@ export function AppHeader() {
 
       <Link
         to="/wallet"
-        className="hidden lg:inline-flex h-10 items-center gap-2 rounded-lg border border-border bg-surface px-3 text-xs font-bold hover:border-primary/60 hover:text-primary"
+        className="inline-flex h-10 shrink-0 items-center gap-2 rounded-lg border border-border bg-surface px-3 text-xs font-bold hover:border-primary/60 hover:text-primary"
         aria-label="Open Wallet"
       >
         <Wallet className="h-4 w-4" />
